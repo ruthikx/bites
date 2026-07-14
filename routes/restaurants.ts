@@ -3,7 +3,7 @@ import { validate } from "../middlewares/validate.js";
 import { RestaurantSchema, type Restaurant } from "../schemas/restaurants.js";
 import { initializeRedisClient } from "../utils/client.js";
 import { nanoid } from "nanoid";
-import { restaurantKeyById, reviewDetailsKeyById, reviewKeyById } from "../utils/keys.js";
+import { cuisineKey, cuisinesKey, restaurantCuisinesKeyById, restaurantKeyById, reviewDetailsKeyById, reviewKeyById } from "../utils/keys.js";
 import { errorResponse, successResponse } from "../utils/responses.js";
 import { checkRestaurantExists } from "../middlewares/checkRestaurantsId.js";
 import { ReviewSchema, type Review  } from "../schemas/review.js";
@@ -16,8 +16,16 @@ router.post("/", validate(RestaurantSchema), async (req,res,next) => {
         const id = nanoid();
         const restaurantKey = restaurantKeyById(id);
         const hashData = {id, name: data.name, location: data.location};
-        const addResult = await client.hSet(restaurantKey,hashData);
-        console.log(`added ${addResult} fields`);
+        await Promise.all([
+            ...data.cuisines.map(cuisine => 
+                Promise.all([
+                    client.sAdd(cuisinesKey, cuisine),
+                    client.sAdd(cuisineKey(cuisine), id),
+                    client.sAdd(restaurantCuisinesKeyById(id),cuisine)
+                ])
+            ),
+            client.hSet(restaurantKey,hashData)
+        ]);
         return successResponse(res, hashData, "Added new restaurants");
     }catch(error){
         next(error);
@@ -92,8 +100,12 @@ router.get("/:restaurantId", checkRestaurantExists, async (req: Request<{restaur
     try{
         const client = await initializeRedisClient();
         const restaurantKey = restaurantKeyById(restaurantId);
-        const [viewCount,restaurant] = await Promise.all([client.hIncrBy(restaurantKey, "viewCount", 1), client.hGetAll(restaurantKey)]) ; 
-        return successResponse(res, restaurant)
+        const [viewCount,restaurant,cuisines] = await Promise.all([
+            client.hIncrBy(restaurantKey, "viewCount", 1), 
+            client.hGetAll(restaurantKey),
+            client.sMembers(restaurantCuisinesKeyById(restaurantId))
+        ]) ; 
+        return successResponse(res, {...restaurant, cuisines})
 
     }catch(error){
         next(error)
